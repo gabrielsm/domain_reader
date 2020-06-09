@@ -4,7 +4,7 @@ from autologging import logged
 
 from platform_sdk.process_memory import ProcessMemoryApi
 from .sql_executor_base import SqlExecutorBase
-
+import uuid
 
 @logged
 class DomainWriter(SqlExecutorBase):
@@ -47,6 +47,7 @@ class DomainWriter(SqlExecutorBase):
                     branch = objects.get(entity, '_metadata.branch')
                     change_track = objects.get(entity, '_metadata.changeTrack')
                     from_id = objects.get(entity, '_metadata.from_id')
+
                     yield from self._update_on_master(branch, change_track, entity, fields, instance_id, table)
                     yield from self._update_on_branch(branch, change_track, entity, fields, from_id, instance_id, table)
                     yield from self._create(change_track, entity, fields, from_id, table)
@@ -91,9 +92,17 @@ class DomainWriter(SqlExecutorBase):
         entity['deleted'] = change_track == 'destroy'
         entity['branch'] = objects.get(entity, '_metadata.branch')
         entity['modified'] = datetime.now()
+
+        if objects.get(entity, '_metadata.ReproductionId'):
+            reproduction_from_id = entity['id']
+            entity['id'] = uuid.uuid4()
+
+            return self._get_insert_sql(table, entity, fields, from_id, reproduction_from_id)
+
         values = [f"{field['column']}=%s" for field in fields]
         params = tuple(entity[field['name']] if field['name'] in entity else None for field in fields)
         params += (entity_id,)  # entity id parameter
+
         return {
             'query': self.QUERIES['update'].format(
                 table=table,
@@ -101,13 +110,16 @@ class DomainWriter(SqlExecutorBase):
             'params': params
         }
 
-    def _get_insert_sql(self, table, entity, fields, from_id):
+    def _get_insert_sql(self, table, entity, fields, from_id, reproduction_from_id=None):
         if from_id:
             entity['from_id'] = from_id
 
+        if not reproduction_from_id and objects.get(entity, '_metadata.ReproductionId'):
+            entity['reproduction_from_id'] = entity['id']
+
         if not any(field.get('column') == 'id' for field in fields):
             fields.append({'name': 'id', 'column':'id'})
-        
+
         entity['branch'] = objects.get(entity, '_metadata.branch')
         columns = [field['column'] for field in fields if field['name'] in entity]
 
